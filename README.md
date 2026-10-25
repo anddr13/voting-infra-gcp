@@ -76,4 +76,9 @@ kubectl -n argocd port-forward svc/argocd-server 8443:443
   the VPC deletion. The script deletes the `root` Application (cascading), then any remaining LoadBalancer Services and PVCs.
 - **No JSON keys:** GitHub Actions signs in through Workload Identity Federation, trusted only for `main` of this
   repository (`attribute_condition`).
+- **Immutable GitHub OIDC subjects.** Repositories created after 2026-07-15 present
+  `repo:<owner>@<owner_id>/<repo>@<repo_id>:ref:...` instead of `repo:<owner>/<repo>:ref:...`, so a
+  re-created repository with the same name cannot reuse the trust. `bootstrap/github.tf` looks the IDs up
+  in the GitHub API and the pool provider condition uses them; the old name-only form would be rejected with `AADSTS700213`-style
+  "no matching federated identity" errors.
 - The roles of the Actions service account (Editor + IAM admin + container.admin) are a deliberate shortcut for a sandbox project.
