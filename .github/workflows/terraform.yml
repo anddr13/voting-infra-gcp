@@ -1,0 +1,107 @@
+name: terraform
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      action:
+        description: "apply = create or update the environment, destroy = delete it"
+        type: choice
+        options: [apply, destroy]
+        default: apply
+  schedule:
+    # Safety net for a pay-per-hour sandbox: whatever is still running at 01:00 UTC is destroyed.
+    - cron: "0 1 * * *"
+
+permissions:
+  contents: read
+  id-token: write # OIDC: Workload Identity Federation, no service account key stored in GitHub
+
+concurrency:
+  group: terraform
+  cancel-in-progress: false
+
+env:
+  TF_VAR_project_id: ${{ vars.GCP_PROJECT_ID }}
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  check:
+    if: github.event_name == 'pull_request' || github.event_name == 'push'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: hashicorp/setup-terraform@v4
+      - run: terraform fmt -check -recursive
+      - name: Validate
+        run: |
+          for dir in bootstrap infra; do
+            terraform -chdir="$dir" init -backend=false
+            terraform -chdir="$dir" validate
+          done
+      - uses: terraform-linters/setup-tflint@v6
+      - run: tflint --init && tflint --recursive --config "$GITHUB_WORKSPACE/.tflint.hcl"
+
+  apply:
+    if: github.event_name == 'workflow_dispatch' && inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: gke-gcloud-auth-plugin
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+      - run: terraform init -backend-config=backend.hcl
+      - run: terraform apply -auto-approve
+      - name: Wait for the app
+        run: |
+          cluster=$(terraform output -raw cluster_name)
+          gcloud container clusters get-credentials "$cluster" \
+            --zone "$(terraform output -raw zone)" --project "$TF_VAR_project_id"
+          bash ../scripts/wait-for-app.sh "$cluster"
+
+  destroy:
+    # The nightly run is skipped until bootstrap has set the repository variables.
+    if: (github.event_name == 'schedule' && vars.GCP_WIF_PROVIDER != '') || (github.event_name == 'workflow_dispatch' && inputs.action == 'destroy')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        working-directory: infra
+    steps:
+      - uses: actions/checkout@v7
+      - uses: google-github-actions/auth@v3
+        with:
+          workload_identity_provider: ${{ vars.GCP_WIF_PROVIDER }}
+          service_account: ${{ vars.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v3
+        with:
+          install_components: gke-gcloud-auth-plugin
+      - uses: hashicorp/setup-terraform@v4
+        with:
+          terraform_wrapper: false
+      - run: terraform init -backend-config=backend.hcl
+      - name: Remove load balancers and disks created by Kubernetes
+        run: |
+          cluster=$(terraform output -raw cluster_name 2> /dev/null || true)
+          zone=$(terraform output -raw zone 2> /dev/null || true)
+          if [ -n "$cluster" ] && gcloud container clusters describe "$cluster" --zone "$zone" > /dev/null 2>&1; then
+            gcloud container clusters get-credentials "$cluster" --zone "$zone" --project "$TF_VAR_project_id"
+            bash ../scripts/drain-cluster.sh "$cluster"
+          else
+            echo "No cluster, nothing to drain."
+          fi
+      - run: terraform destroy -auto-approve
