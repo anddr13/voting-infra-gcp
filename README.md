@@ -41,7 +41,8 @@ Keep `bootstrap/` around: the GCS bucket holds the state, and a deleted Workload
 GitHub → **Actions → terraform → Run workflow**:
 - `apply`: ~15–20 minutes (GKE ~6–8, Argo CD + Kafka ~8). The job waits until the app responds
   and writes its URL to the job summary.
-- `destroy`: removes everything. A nightly cron (01:00 UTC) runs it in case you forget.
+- `destroy`: removes everything. Two nightly crons (01:23 and 03:53 UTC) run it in case you forget; they avoid the top of the hour,
+  where GitHub delays scheduled runs (a 01:00 run once started at 05:42).
 
 From a laptop (requires `gke-gcloud-auth-plugin`):
 
