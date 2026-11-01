@@ -62,6 +62,27 @@ kubectl -n voting get scaledobject,hpa -w              # run the k6 test from vo
 kubectl -n argocd port-forward svc/argocd-server 8443:443
 ```
 
+## Results (measured 2026-11-01)
+
+Zonal GKE in europe-central2, 2 spot e2-standard-2 nodes, voting-gitops `main` (PostgreSQL via CloudNativePG, Kafka,
+Redis, KEDA), applied and destroyed by the GitHub Actions workflow.
+
+| Step | Time |
+|---|---|
+| `terraform apply` (VPC, GKE, node pool, Argo CD) | 9 min 15 s |
+| Argo CD waves until the app answered on the load balancer | 6 min 57 s |
+| **Bring-up total** | **16 min 12 s** |
+| Drain (root Application, LoadBalancer Services, PVCs) | 1 min 3 s |
+| `terraform destroy` | 9 min 5 s |
+| **Tear-down total** | **10 min 8 s** |
+
+- A vote sent from a laptop came back in `/api/results` (`{"cat":1,"dog":0}`): Kafka → worker → PostgreSQL → Redis.
+- After the destroy, `gcloud` found no cluster, VM, disk, forwarding rule, address, target pool or backend service in
+  the project. Only the `default` network and its four firewall rules remain, which Google creates with the Compute API
+  and does not charge for.
+- The first apply failed in `terraform init` with `iam.serviceAccounts.getAccessToken` denied: the Workload Identity
+  binding was a minute old and had not propagated yet. A rerun of the same job passed with no change.
+
 ## Pitfalls handled (and why)
 
 - **Scripts never touch the wrong cluster.** `drain-cluster.sh` deletes things cluster-wide, so both scripts take the
