@@ -3,6 +3,17 @@ variable "project_id" {
   type        = string
 }
 
+variable "billing_account" {
+  description = "Billing account ID linked to the project (gcloud billing accounts list)."
+  type        = string
+}
+
+variable "budget_limit_usd" {
+  description = "Monthly budget for the project; alerts at 50% actual and 100% forecasted spend."
+  type        = number
+  default     = 10
+}
+
 variable "region" {
   description = "Location of the state bucket."
   type        = string

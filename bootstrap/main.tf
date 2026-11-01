@@ -28,6 +28,9 @@ terraform {
 provider "google" {
   project = var.project_id
   region  = var.region
+  # The Budget API bills its quota to a project; with user credentials there is none by default.
+  user_project_override = true
+  billing_project       = var.project_id
 }
 
 resource "google_project_service" "apis" {
@@ -36,6 +39,7 @@ resource "google_project_service" "apis" {
     "compute.googleapis.com",
     "container.googleapis.com",
     "iam.googleapis.com",
+    "billingbudgets.googleapis.com",
     "iamcredentials.googleapis.com",
     "sts.googleapis.com",
     "storage.googleapis.com",
@@ -118,6 +122,39 @@ resource "google_service_account_iam_member" "github_wif" {
   role               = "roles/iam.workloadIdentityUser"
   member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository_id/${local.github_repo.id}"
 }
+
+# --- Cost alerts -------------------------------------------------------------------
+
+# E-mails the billing account's admins; it does not stop anything. Scoped to this project only.
+resource "google_billing_budget" "monthly" {
+  billing_account = var.billing_account
+  display_name    = "voting-sandbox"
+
+  budget_filter {
+    projects = ["projects/${data.google_project.this.number}"]
+  }
+
+  amount {
+    specified_amount {
+      currency_code = "USD"
+      units         = tostring(var.budget_limit_usd)
+    }
+  }
+
+  # Forecast first: it fires while a forgotten cluster is still running, not after the money is spent.
+  threshold_rules {
+    threshold_percent = 1.0
+    spend_basis       = "FORECASTED_SPEND"
+  }
+
+  threshold_rules {
+    threshold_percent = 0.5
+  }
+
+  depends_on = [google_project_service.apis]
+}
+
+data "google_project" "this" {}
 
 # --- Wiring for infra/ ---------------------------------------------------------------
 

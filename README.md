@@ -9,7 +9,7 @@ Related: [voting-gitops](https://github.com/anddr13/voting-gitops) (what runs in
 ## What gets created
 
 ```
-bootstrap/   once, local state:  project APIs · GCS bucket for state
+bootstrap/   once, local state:  project APIs · GCS bucket for state · monthly budget with e-mail alerts
                                   Workload Identity Federation + service account for GitHub Actions
 infra/       daily (apply/destroy):
   VPC + subnet with secondary ranges for pods/services (VPC-native)
@@ -30,7 +30,7 @@ Create the project in the console and link a billing account to it first.
 ```bash
 cd bootstrap
 terraform init
-terraform apply -var project_id=<your-project-id>
+terraform apply -var project_id=<your-project-id> -var billing_account=<billing-account-id>
 terraform output -raw next_steps   # run the printed commands: repository variables + commit backend.hcl
 ```
 
@@ -68,6 +68,9 @@ kubectl -n argocd port-forward svc/argocd-server 8443:443
   expected cluster name and refuse to run if kubectl points anywhere else (e.g. a work context on your laptop).
   `kubeconfig_command` writes credentials to a separate file (`~/.kube/voting-<cloud>`), so `~/.kube/config`
   and its current context are never modified.
+- **A budget as the last safety net.** The nightly destroy can fail or be delayed, and Kubernetes-created load
+  balancers or disks can outlive a failed drain. The bootstrap adds a $10/month budget scoped to this project that
+  e-mails the billing account's admins at 50% actual and 100% forecasted spend. It alerts, it does not stop anything.
 - **`deletion_protection = false`.** The provider defaults to `true`, and `terraform destroy` of the cluster simply fails.
 - **Zonal, not regional cluster.** The free tier covers the management fee of one zonal cluster, and a regional cluster
   would also triple the nodes (one set per zone).
