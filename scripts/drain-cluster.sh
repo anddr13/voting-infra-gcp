@@ -27,7 +27,22 @@ if ! kubectl cluster-info > /dev/null 2>&1; then
 fi
 
 echo "Deleting the root Argo CD application (cascades to every child application)..."
-kubectl -n argocd delete application root --ignore-not-found --wait=true --timeout=15m
+kubectl -n argocd delete application root --ignore-not-found --wait=false
+# A KafkaTopic carries a finalizer that only the Strimzi topic operator removes. If the cascade takes the Kafka
+# cluster (and with it the operator) first, the topics and so the whole cascade hang forever (seen on AKS).
+# Once no Kafka is left, nothing would ever process them, so their finalizers are dropped here.
+for _ in $(seq 1 180); do
+  kubectl -n argocd get application root > /dev/null 2>&1 || break
+  if [ -z "$(kubectl get kafkas.kafka.strimzi.io -A -o name 2> /dev/null)" ]; then
+    kubectl get kafkatopics.kafka.strimzi.io -A -o jsonpath='{range .items[?(@.metadata.deletionTimestamp)]}{.metadata.namespace}{" "}{.metadata.name}{"
+"}{end}' 2> /dev/null |
+      while read -r ns name; do
+        [ -n "$name" ] && kubectl -n "$ns" patch kafkatopic "$name" --type=merge -p '{"metadata":{"finalizers":null}}'
+      done
+  fi
+  sleep 5
+done
+kubectl -n argocd get application root > /dev/null 2>&1 && echo "The root application is still there after 15 min." >&2
 
 echo "Removing any remaining LoadBalancer Services..."
 kubectl get svc -A -o jsonpath='{range .items[?(@.spec.type=="LoadBalancer")]}{.metadata.namespace}{" "}{.metadata.name}{"\n"}{end}' |
